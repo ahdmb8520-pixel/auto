@@ -116,3 +116,14 @@ class ReportStats:
             self.top_services = []
         if self.top_customers is None:
             self.top_customers = []
+
+@dataclass
+class Appointment:
+    id: Optional[int] = None
+    name: str = ""
+    description: str = ""
+    date: str = ""
+    
+    def __post_init__(self):
+        if not self.date:
+            self.date = datetime.now().strftime('%Y-%m-%d')

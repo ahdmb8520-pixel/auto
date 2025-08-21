@@ -604,20 +604,19 @@ class InvoicesFrame(BaseFrame):
                                font=config.FONTS['title'])
         title_label.pack(anchor=W, pady=(0, 10))
         
-        # Filter and buttons frame
+        # Search and buttons frame
         top_frame = ttk.Frame(main_frame)
         top_frame.pack(fill=X, pady=(0, 10))
         
-        # Filter options
-        filter_frame = ttk.Frame(top_frame)
-        filter_frame.pack(side=LEFT)
+        # Search
+        search_frame = ttk.Frame(top_frame)
+        search_frame.pack(side=LEFT)
         
-        ttk.Label(filter_frame, text="Filter:").pack(side=LEFT, padx=(0, 5))
-        self.filter_var = tk.StringVar(value="All")
-        filter_combo = ttk.Combobox(filter_frame, textvariable=self.filter_var, 
-                                   values=["All", "Paid", "Unpaid"], width=15)
-        filter_combo.pack(side=LEFT, padx=(0, 10))
-        filter_combo.bind('<<ComboboxSelected>>', lambda e: self.refresh())
+        ttk.Label(search_frame, text="Search:").pack(side=LEFT, padx=(0, 5))
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', self.on_search)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        search_entry.pack(side=LEFT, padx=(0, 10))
         
         # Buttons
         button_frame = ttk.Frame(top_frame)
@@ -625,10 +624,10 @@ class InvoicesFrame(BaseFrame):
         
         ttk.Button(button_frame, text="Create Invoice", command=self.create_invoice,
                   bootstyle=PRIMARY).pack(side=LEFT, padx=2)
-        ttk.Button(button_frame, text="Export PDF", command=self.export_pdf,
+        ttk.Button(button_frame, text="Mark as Paid", command=lambda: self.update_status('Paid'),
+                  bootstyle=SUCCESS).pack(side=LEFT, padx=2)
+        ttk.Button(button_frame, text="Mark as Unpaid", command=lambda: self.update_status('Unpaid'),
                   bootstyle=SECONDARY).pack(side=LEFT, padx=2)
-        ttk.Button(button_frame, text="Update Status", command=self.update_status,
-                  bootstyle=WARNING).pack(side=LEFT, padx=2)
         ttk.Button(button_frame, text="Refresh", command=self.refresh,
                   bootstyle=SUCCESS).pack(side=LEFT, padx=2)
         
@@ -640,27 +639,30 @@ class InvoicesFrame(BaseFrame):
     
     def create_treeview(self, parent):
         """Create the invoices treeview"""
+        # Create treeview with scrollbars
         tree_frame = ttk.Frame(parent)
         tree_frame.pack(fill=BOTH, expand=True)
         
-        columns = ('ID', 'Invoice Date', 'License Plate', 'Customer', 'Amount', 'Status')
+        columns = ('ID', 'Work Order', 'Date', 'Amount', 'Status', 'Customer', 'Phone')
         self.tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=20)
         
         # Define headings
-        self.tree.heading('ID', text='Invoice ID')
-        self.tree.heading('Invoice Date', text='Invoice Date')
-        self.tree.heading('License Plate', text='License Plate')
-        self.tree.heading('Customer', text='Customer')
+        self.tree.heading('ID', text='ID')
+        self.tree.heading('Work Order', text='Work Order')
+        self.tree.heading('Date', text='Date')
         self.tree.heading('Amount', text='Amount')
         self.tree.heading('Status', text='Status')
+        self.tree.heading('Customer', text='Customer')
+        self.tree.heading('Phone', text='Phone')
         
         # Define column widths
-        self.tree.column('ID', width=80)
-        self.tree.column('Invoice Date', width=120)
-        self.tree.column('License Plate', width=120)
-        self.tree.column('Customer', width=200)
-        self.tree.column('Amount', width=120)
+        self.tree.column('ID', width=50)
+        self.tree.column('Work Order', width=100)
+        self.tree.column('Date', width=100)
+        self.tree.column('Amount', width=100)
         self.tree.column('Status', width=100)
+        self.tree.column('Customer', width=200)
+        self.tree.column('Phone', width=150)
         
         # Scrollbars
         v_scrollbar = ttk.Scrollbar(tree_frame, orient=VERTICAL, command=self.tree.yview)
@@ -671,6 +673,9 @@ class InvoicesFrame(BaseFrame):
         self.tree.pack(side=LEFT, fill=BOTH, expand=True)
         v_scrollbar.pack(side=RIGHT, fill=Y)
         h_scrollbar.pack(side=BOTTOM, fill=X)
+        
+        # Bind double-click to mark as paid
+        self.tree.bind('<Double-1>', lambda e: self.update_status('Paid'))
     
     def refresh(self):
         """Refresh invoice data"""
@@ -681,204 +686,257 @@ class InvoicesFrame(BaseFrame):
         # Load invoices
         invoices = self.db_manager.get_invoices()
         
-        # Apply filter
-        filter_status = self.filter_var.get()
-        if filter_status != "All":
-            invoices = [inv for inv in invoices if inv['status'] == filter_status]
-        
         # Populate treeview
-        for invoice in invoices:
-            invoice_date = utils.format_date(invoice['invoice_date']) if invoice['invoice_date'] else ''
+        for inv in invoices:
             self.tree.insert('', END, values=(
-                invoice['id'],
-                invoice_date,
-                invoice['license_plate'],
-                invoice['customer_name'],
-                utils.format_currency(invoice['total_amount'] or 0),
-                invoice['status']
+                inv['id'],
+                inv['work_order_id'],
+                utils.format_date(inv['invoice_date'][:10]) if inv['invoice_date'] else '',
+                utils.format_currency(inv['total_amount']),
+                inv['status'],
+                inv['customer_name'],
+                inv['customer_phone']
             ))
     
+    def on_search(self, *args):
+        self.refresh()
+    
     def create_invoice(self):
-        """Create invoice from work order"""
-        # Get completed work orders that don't have invoices
-        work_orders = self.db_manager.get_work_orders()
-        completed_orders = [wo for wo in work_orders if wo['status'] == 'Completed']
-        
-        # Filter out work orders that already have invoices
-        invoices = self.db_manager.get_invoices()
-        invoiced_wo_ids = {inv['work_order_id'] for inv in invoices}
-        available_orders = [wo for wo in completed_orders if wo['id'] not in invoiced_wo_ids]
-        
-        if not available_orders:
-            utils.show_info("No Work Orders", "No completed work orders available for invoicing")
-            return
-        
-        # Show selection dialog
-        dialog = InvoiceCreateDialog(self, available_orders)
-        self.wait_window(dialog.dialog)
-        
-        if dialog.result:
-            try:
-                work_order_id = dialog.result['work_order_id']
-                invoice_id = self.db_manager.create_invoice(work_order_id)
-                utils.show_info("Success", f"Invoice #{invoice_id} created successfully")
-                self.refresh()
-            except Exception as e:
-                utils.show_error("Error", f"Failed to create invoice: {e}")
+        """Create invoice from selected work order"""
+        utils.show_warning("Not Implemented", "Creating invoices directly is not available here.")
     
-    def export_pdf(self):
-        """Export selected invoice to PDF"""
+    def update_status(self, status):
         selection = self.tree.selection()
         if not selection:
-            utils.show_warning("No Selection", "Please select an invoice to export")
+            utils.show_warning("No Selection", "Please select an invoice")
             return
         
         item = self.tree.item(selection[0])
         invoice_id = item['values'][0]
         
-        # Get save location
-        filename = utils.save_file_dialog(
-            defaultextension=".pdf",
-            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
-        )
-        
-        if filename:
-            try:
-                self.generate_invoice_pdf(invoice_id, filename)
-                utils.show_info("Success", f"Invoice exported to {filename}")
-                
-                if utils.ask_yes_no("Open File", "Would you like to open the exported file?"):
-                    utils.open_file_externally(filename)
-                    
-            except Exception as e:
-                utils.show_error("Error", f"Failed to export invoice: {e}")
+        try:
+            self.db_manager.update_invoice_status(invoice_id, status)
+            utils.show_info("Success", f"Invoice marked as {status}")
+            self.refresh()
+        except Exception as e:
+            utils.show_error("Error", f"Failed to update status: {e}")
+
+class AppointmentsFrame(BaseFrame):
+    """Frame for appointment management"""
     
-    def generate_invoice_pdf(self, invoice_id, filename):
-        """Generate PDF for invoice"""
-        # Get invoice data
-        invoices = self.db_manager.get_invoices()
-        invoice = None
-        for inv in invoices:
-            if inv['id'] == invoice_id:
-                invoice = inv
-                break
+    def setup_frame(self):
+        # Create main container
+        main_frame = ttk.Frame(self)
+        main_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
         
-        if not invoice:
-            raise ValueError("Invoice not found")
+        # Title
+        title_label = ttk.Label(main_frame, text="Appointment Management", 
+                               font=config.FONTS['title'])
+        title_label.pack(anchor=W, pady=(0, 10))
         
-        # Get work order details
-        work_order = self.db_manager.get_work_order_details(invoice['work_order_id'])
-        services = self.db_manager.get_services_by_work_order(invoice['work_order_id'])
-        parts = self.db_manager.get_spare_parts_by_work_order(invoice['work_order_id'])
+        # Input fields frame
+        fields_frame = ttk.Frame(main_frame)
+        fields_frame.pack(fill=X, pady=(0, 10))
         
-        # Create PDF
-        doc = SimpleDocTemplate(filename, pagesize=letter)
-        styles = getSampleStyleSheet()
-        story = []
+        # ID (read-only)
+        ttk.Label(fields_frame, text="ID:").grid(row=0, column=0, sticky=W, pady=5)
+        self.id_var = tk.StringVar()
+        self.id_entry = ttk.Entry(fields_frame, textvariable=self.id_var, width=10, state='readonly')
+        self.id_entry.grid(row=0, column=1, pady=5, padx=(10, 20), sticky=W)
         
-        # Company header
-        company_name = self.db_manager.get_setting('company_name', config.DEFAULT_COMPANY_NAME)
-        story.append(Paragraph(f"<b>{company_name}</b>", styles['Title']))
-        story.append(Spacer(1, 12))
+        # Name
+        ttk.Label(fields_frame, text="Name:").grid(row=0, column=2, sticky=W, pady=5)
+        self.name_var = tk.StringVar()
+        self.name_entry = ttk.Entry(fields_frame, textvariable=self.name_var, width=40)
+        self.name_entry.grid(row=0, column=3, pady=5, padx=(10, 20), sticky=W)
         
-        # Invoice header
-        story.append(Paragraph(f"<b>INVOICE #{invoice['id']}</b>", styles['Heading1']))
-        story.append(Paragraph(f"Date: {utils.format_date(invoice['invoice_date'])}", styles['Normal']))
-        story.append(Spacer(1, 12))
+        # Date (DatePicker)
+        ttk.Label(fields_frame, text="Date:").grid(row=0, column=4, sticky=W, pady=5)
+        self.date_var = tk.StringVar()
+        # Try to use ttkbootstrap DateEntry, fallback to Entry
+        try:
+            from ttkbootstrap.widgets import DateEntry
+            self.date_entry = DateEntry(fields_frame, textvariable=self.date_var, width=18, bootstyle=PRIMARY)
+        except Exception:
+            self.date_entry = ttk.Entry(fields_frame, textvariable=self.date_var, width=20)
+        self.date_entry.grid(row=0, column=5, pady=5, padx=(10, 0), sticky=W)
+        self.date_var.set(datetime.now().strftime('%Y-%m-%d'))
         
-        # Customer and vehicle info
-        story.append(Paragraph("<b>Customer Information:</b>", styles['Heading2']))
-        story.append(Paragraph(f"Name: {work_order['customer_name']}", styles['Normal']))
-        story.append(Paragraph(f"Phone: {work_order['customer_phone']}", styles['Normal']))
-        story.append(Spacer(1, 12))
+        # Description (multi-line)
+        ttk.Label(fields_frame, text="Description:").grid(row=1, column=0, sticky=NW, pady=5)
+        self.description_text = tk.Text(fields_frame, width=80, height=4)
+        self.description_text.grid(row=1, column=1, columnspan=5, pady=5, padx=(10, 0), sticky=W)
         
-        story.append(Paragraph("<b>Vehicle Information:</b>", styles['Heading2']))
-        story.append(Paragraph(f"License Plate: {work_order['license_plate']}", styles['Normal']))
-        story.append(Paragraph(f"Vehicle: {work_order['brand']} {work_order['model']}", styles['Normal']))
-        story.append(Spacer(1, 12))
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=X, pady=(0, 10))
+        ttk.Button(button_frame, text="Create", command=self.create_appointment, bootstyle=PRIMARY).pack(side=LEFT, padx=2)
+        ttk.Button(button_frame, text="Read", command=self.read_appointment, bootstyle=SECONDARY).pack(side=LEFT, padx=2)
+        ttk.Button(button_frame, text="Update", command=self.update_appointment, bootstyle=INFO).pack(side=LEFT, padx=2)
+        ttk.Button(button_frame, text="Delete", command=self.delete_appointment, bootstyle=DANGER).pack(side=LEFT, padx=2)
+        ttk.Button(button_frame, text="Clear/Reset", command=self.clear_fields, bootstyle=WARNING).pack(side=LEFT, padx=2)
         
-        # Services table
-        if services:
-            story.append(Paragraph("<b>Services:</b>", styles['Heading2']))
-            service_data = [['Service', 'Description', 'Qty', 'Price', 'Total']]
-            for service in services:
-                service_data.append([
-                    service['name'],
-                    service['description'] or '',
-                    str(service['quantity']),
-                    utils.format_currency(service['price']),
-                    utils.format_currency(service['quantity'] * service['price'])
-                ])
-            
-            service_table = Table(service_data)
-            service_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 14),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
-            story.append(service_table)
-            story.append(Spacer(1, 12))
+        # Treeview for appointments
+        self.create_treeview(main_frame)
         
-        # Parts table
-        if parts:
-            story.append(Paragraph("<b>Spare Parts:</b>", styles['Heading2']))
-            parts_data = [['Part', 'Description', 'Qty', 'Price', 'Total']]
-            for part in parts:
-                parts_data.append([
-                    part['name'],
-                    part['description'] or '',
-                    str(part['quantity']),
-                    utils.format_currency(part['price']),
-                    utils.format_currency(part['quantity'] * part['price'])
-                ])
-            
-            parts_table = Table(parts_data)
-            parts_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 14),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
-            story.append(parts_table)
-            story.append(Spacer(1, 12))
+        # Load initial data
+        self.refresh()
         
-        # Total
-        story.append(Paragraph(f"<b>Total Amount: {utils.format_currency(invoice['total_amount'])}</b>", 
-                              styles['Heading1']))
-        story.append(Paragraph(f"<b>Status: {invoice['status']}</b>", styles['Heading2']))
+    def create_treeview(self, parent):
+        tree_frame = ttk.Frame(parent)
+        tree_frame.pack(fill=BOTH, expand=True)
         
-        doc.build(story)
+        columns = ('ID', 'Name', 'Description', 'Date')
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=16)
+        
+        self.tree.heading('ID', text='ID')
+        self.tree.heading('Name', text='Name')
+        self.tree.heading('Description', text='Description')
+        self.tree.heading('Date', text='Date')
+        
+        self.tree.column('ID', width=60)
+        self.tree.column('Name', width=220)
+        self.tree.column('Description', width=500)
+        self.tree.column('Date', width=120)
+        
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient=VERTICAL, command=self.tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient=HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        self.tree.pack(side=LEFT, fill=BOTH, expand=True)
+        v_scrollbar.pack(side=RIGHT, fill=Y)
+        h_scrollbar.pack(side=BOTTOM, fill=X)
+        
+        self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
     
-    def update_status(self):
-        """Update invoice status"""
+    def refresh(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        appointments = self.db_manager.get_appointments()
+        for appt in appointments:
+            self.tree.insert('', END, values=(
+                appt['id'],
+                appt['name'],
+                utils.truncate_text(appt['description'] or '', 80),
+                utils.format_date(appt['date'][:10]) if appt['date'] else ''
+            ))
+    
+    def on_tree_select(self, event=None):
         selection = self.tree.selection()
         if not selection:
-            utils.show_warning("No Selection", "Please select an invoice to update")
             return
-        
         item = self.tree.item(selection[0])
-        invoice_id = item['values'][0]
-        current_status = item['values'][5]
-        
-        # Simple status toggle for now
-        new_status = "Paid" if current_status == "Unpaid" else "Unpaid"
-        
-        if utils.ask_yes_no("Update Status", f"Change invoice status from '{current_status}' to '{new_status}'?"):
+        values = item['values']
+        self.id_var.set(values[0])
+        self.name_var.set(values[1])
+        # Fetch full description from DB in case it was truncated
+        try:
+            appt_id = int(values[0])
+            full = [a for a in self.db_manager.get_appointments() if a['id'] == appt_id]
+            desc = full[0]['description'] if full else values[2]
+        except Exception:
+            desc = values[2]
+        self.description_text.delete('1.0', tk.END)
+        self.description_text.insert('1.0', desc or '')
+        # store date as YYYY-MM-DD
+        date_raw = values[3]
+        try:
+            # if formatted like MM/DD/YYYY -> convert back
+            date_obj = datetime.strptime(date_raw, '%m/%d/%Y')
+            self.date_var.set(date_obj.strftime('%Y-%m-%d'))
+        except Exception:
+            self.date_var.set(date_raw)
+    
+    def clear_fields(self):
+        self.id_var.set("")
+        self.name_var.set("")
+        self.description_text.delete('1.0', tk.END)
+        self.date_var.set(datetime.now().strftime('%Y-%m-%d'))
+    
+    def create_appointment(self):
+        name = self.name_var.get().strip()
+        description = self.description_text.get('1.0', tk.END).strip()
+        date_str = self.date_var.get().strip()
+        if not name:
+            utils.show_error("Validation Error", "Name is required")
+            return
+        if not date_str:
+            utils.show_error("Validation Error", "Date is required")
+            return
+        try:
+            # normalize to YYYY-MM-DD
             try:
-                self.db_manager.update_invoice_status(invoice_id, new_status)
-                utils.show_info("Success", "Invoice status updated successfully")
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                date_norm = dt.strftime('%Y-%m-%d')
+            except ValueError:
+                dt = datetime.strptime(date_str, '%m/%d/%Y')
+                date_norm = dt.strftime('%Y-%m-%d')
+            self.db_manager.add_appointment(name, description, date_norm)
+            utils.show_info("Success", "Appointment created")
+            self.refresh()
+            self.clear_fields()
+        except Exception as e:
+            utils.show_error("Error", f"Failed to create appointment: {e}")
+    
+    def read_appointment(self):
+        selection = self.tree.selection()
+        if not selection:
+            utils.show_warning("No Selection", "Please select an appointment to read")
+            return
+        item = self.tree.item(selection[0])
+        appt_id, name, _, date_disp = item['values']
+        # Fetch full row
+        appts = self.db_manager.get_appointments()
+        row = next((a for a in appts if a['id'] == appt_id), None)
+        description = row['description'] if row else ''
+        utils.show_info("Appointment Details", f"ID: {appt_id}\nName: {name}\nDate: {date_disp}\n\nDescription:\n{description}")
+    
+    def update_appointment(self):
+        appt_id = self.id_var.get().strip()
+        if not appt_id:
+            utils.show_warning("No Selection", "Please select an appointment to update")
+            return
+        name = self.name_var.get().strip()
+        description = self.description_text.get('1.0', tk.END).strip()
+        date_str = self.date_var.get().strip()
+        if not name:
+            utils.show_error("Validation Error", "Name is required")
+            return
+        if not date_str:
+            utils.show_error("Validation Error", "Date is required")
+            return
+        try:
+            try:
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                date_norm = dt.strftime('%Y-%m-%d')
+            except ValueError:
+                dt = datetime.strptime(date_str, '%m/%d/%Y')
+                date_norm = dt.strftime('%Y-%m-%d')
+            self.db_manager.update_appointment(int(appt_id), name, description, date_norm)
+            utils.show_info("Success", "Appointment updated")
+            self.refresh()
+        except Exception as e:
+            utils.show_error("Error", f"Failed to update appointment: {e}")
+    
+    def delete_appointment(self):
+        appt_id = self.id_var.get().strip()
+        if not appt_id:
+            selection = self.tree.selection()
+            if selection:
+                item = self.tree.item(selection[0])
+                appt_id = str(item['values'][0])
+        if not appt_id:
+            utils.show_warning("No Selection", "Please select an appointment to delete")
+            return
+        if utils.ask_yes_no("Confirm Delete", "Are you sure you want to delete this appointment?\n\nThis action cannot be undone."):
+            try:
+                self.db_manager.delete_appointment(int(appt_id))
+                utils.show_info("Success", "Appointment deleted")
                 self.refresh()
+                self.clear_fields()
             except Exception as e:
-                utils.show_error("Error", f"Failed to update status: {e}")
+                utils.show_error("Error", f"Failed to delete appointment: {e}")
 
 class ReportsFrame(BaseFrame):
     """Frame for reports and statistics"""
@@ -893,45 +951,24 @@ class ReportsFrame(BaseFrame):
                                font=config.FONTS['title'])
         title_label.pack(anchor=W, pady=(0, 10))
         
-        # Create notebook for different report types
-        notebook = ttk.Notebook(main_frame)
-        notebook.pack(fill=BOTH, expand=True)
-        
-        # Overview tab
-        self.create_overview_tab(notebook)
-        
-        # Revenue tab
-        self.create_revenue_tab(notebook)
-        
-        # Services tab
-        self.create_services_tab(notebook)
-        
-        # Customers tab
-        self.create_customers_tab(notebook)
-    
-    def create_overview_tab(self, notebook):
-        """Create overview statistics tab"""
-        overview_frame = ttk.Frame(notebook)
-        notebook.add(overview_frame, text="Overview")
-        
         # Date range selection
-        date_frame = ttk.Frame(overview_frame)
-        date_frame.pack(fill=X, padx=10, pady=10)
+        range_frame = ttk.Frame(main_frame)
+        range_frame.pack(fill=X, pady=(0, 10))
         
-        ttk.Label(date_frame, text="Date Range:").pack(side=LEFT, padx=(0, 10))
+        ttk.Label(range_frame, text="Date Range:").pack(side=LEFT, padx=(0, 10))
         
         self.date_range_var = tk.StringVar(value="This Month")
-        date_combo = ttk.Combobox(date_frame, textvariable=self.date_range_var, width=20)
+        date_combo = ttk.Combobox(range_frame, textvariable=self.date_range_var, width=20)
         date_ranges = utils.get_date_range_options()
         date_combo['values'] = [option[0] for option in date_ranges]
         date_combo.pack(side=LEFT, padx=(0, 10))
         date_combo.bind('<<ComboboxSelected>>', lambda e: self.refresh_overview())
         
-        ttk.Button(date_frame, text="Refresh", command=self.refresh_overview,
+        ttk.Button(range_frame, text="Refresh", command=self.refresh_overview,
                   bootstyle=PRIMARY).pack(side=LEFT, padx=10)
         
         # Statistics display
-        self.stats_frame = ttk.Frame(overview_frame)
+        self.stats_frame = ttk.Frame(main_frame)
         self.stats_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
         
         self.refresh_overview()
