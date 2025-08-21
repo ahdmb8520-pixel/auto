@@ -136,6 +136,16 @@ class DatabaseManager:
                             )
                         ''')
             
+            # Create appointments table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS appointments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    date DATETIME NOT NULL
+                )
+            ''')
+            
             conn.commit()
             
     def execute_query(self, query: str, params: tuple = ()) -> List[sqlite3.Row]:
@@ -376,6 +386,37 @@ class DatabaseManager:
         """Update invoice status"""
         query = "UPDATE invoices SET status = ? WHERE id = ?"
         return self.execute_update(query, (status, invoice_id))
+    
+    # Appointment operations
+    def add_appointment(self, name: str, description: str, date_str: str) -> int:
+        """Add a new appointment"""
+        query = "INSERT INTO appointments (name, description, date) VALUES (?, ?, ?)"
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (name, description, date_str))
+            conn.commit()
+            return cursor.lastrowid
+    
+    def get_appointments(self) -> List[sqlite3.Row]:
+        """Get all appointments ordered by date"""
+        query = "SELECT * FROM appointments ORDER BY date DESC, id DESC"
+        return self.execute_query(query)
+    
+    def search_appointments(self, search_term: str) -> List[sqlite3.Row]:
+        """Search appointments by name or date"""
+        query = "SELECT * FROM appointments WHERE name LIKE ? OR date LIKE ? ORDER BY date DESC, id DESC"
+        like = f"%{search_term}%"
+        return self.execute_query(query, (like, like))
+    
+    def update_appointment(self, appointment_id: int, name: str, description: str, date_str: str) -> int:
+        """Update an appointment"""
+        query = "UPDATE appointments SET name = ?, description = ?, date = ? WHERE id = ?"
+        return self.execute_update(query, (name, description, date_str, appointment_id))
+    
+    def delete_appointment(self, appointment_id: int) -> int:
+        """Delete an appointment"""
+        query = "DELETE FROM appointments WHERE id = ?"
+        return self.execute_update(query, (appointment_id,))
     
     # Settings operations
     def get_setting(self, key: str, default: str = "") -> str:
