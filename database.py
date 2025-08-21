@@ -260,6 +260,78 @@ class DatabaseManager:
             ORDER BY wo.entry_date DESC
         '''
         return self.execute_query(query)
+
+    def search_work_orders(self, keyword: str) -> List[sqlite3.Row]:
+        """Search work orders by customer name or service/part name/description (case-insensitive)."""
+        # Normalize keyword for case-insensitive LIKE matching
+        kw = f"%{keyword.lower()}%"
+        query = '''
+            SELECT DISTINCT wo.*, v.license_plate, v.brand, v.model, c.name as customer_name, c.phone as customer_phone
+            FROM work_orders wo
+            JOIN vehicles v ON wo.vehicle_id = v.id
+            JOIN customers c ON v.customer_phone = c.phone
+            LEFT JOIN services s ON s.work_order_id = wo.id
+            LEFT JOIN spare_parts p ON p.work_order_id = wo.id
+            WHERE LOWER(c.name) LIKE ?
+               OR LOWER(COALESCE(s.description, '')) LIKE ?
+               OR LOWER(COALESCE(s.name, '')) LIKE ?
+               OR LOWER(COALESCE(p.description, '')) LIKE ?
+               OR LOWER(COALESCE(p.name, '')) LIKE ?
+            ORDER BY wo.entry_date DESC
+        '''
+        return self.execute_query(query, (kw, kw, kw, kw, kw))
+
+    def filter_work_orders(self, keyword: str = "", service_type: Optional[str] = None) -> List[sqlite3.Row]:
+        """Filter work orders by optional keyword and optional service type.
+
+        - keyword: matches customer name, service/part name or description (case-insensitive, partial)
+        - service_type: one of 'Preventive', 'Corrective', 'Inspection' (case-insensitive)
+        """
+        keyword = (keyword or "").strip().lower()
+        service_type = (service_type or "").strip().lower() or None
+
+        base = [
+            "SELECT DISTINCT wo.*, v.license_plate, v.brand, v.model, c.name as customer_name, c.phone as customer_phone",
+            "FROM work_orders wo",
+            "JOIN vehicles v ON wo.vehicle_id = v.id",
+            "JOIN customers c ON v.customer_phone = c.phone",
+            "LEFT JOIN services s ON s.work_order_id = wo.id",
+            "LEFT JOIN spare_parts p ON p.work_order_id = wo.id",
+        ]
+        conditions = []
+        params: list = []
+
+        if keyword:
+            kw = f"%{keyword}%"
+            conditions.append(
+                "(LOWER(c.name) LIKE ? OR LOWER(COALESCE(s.name,'')) LIKE ? OR LOWER(COALESCE(s.description,'')) LIKE ? "
+                "OR LOWER(COALESCE(p.name,'')) LIKE ? OR LOWER(COALESCE(p.description,'')) LIKE ?)"
+            )
+            params.extend([kw, kw, kw, kw, kw])
+
+        # Map service types to indicative keywords present in names/descriptions
+        if service_type in {"preventive", "corrective", "inspection"}:
+            if service_type == "preventive":
+                keywords = ["oil", "filter", "rotate", "rotation", "align", "alignment", "battery", "coolant", "maintenance", "service", "flush", "tune"]
+            elif service_type == "corrective":
+                keywords = ["repair", "replace", "fix", "leak", "broken", "failure", "install", "adjust", "calibrate"]
+            else:  # inspection
+                keywords = ["inspect", "inspection", "diagnos", "check", "test", "evaluate"]
+
+            # Concatenate service/part text fields and search once per keyword
+            concat_expr = "LOWER(COALESCE(s.name,'') || ' ' || COALESCE(s.description,'') || ' ' || COALESCE(p.name,'') || ' ' || COALESCE(p.description,''))"
+            type_subconds = []
+            for kw_word in keywords:
+                type_subconds.append(f"{concat_expr} LIKE ?")
+                params.append(f"%{kw_word}%")
+            conditions.append("(" + " OR ".join(type_subconds) + ")")
+
+        query = "\n".join(base)
+        if conditions:
+            query += "\nWHERE " + " AND ".join(conditions)
+        query += "\nORDER BY wo.entry_date DESC"
+
+        return self.execute_query(query, tuple(params))
     
     def get_work_order_details(self, work_order_id: int) -> Optional[sqlite3.Row]:
         """Get detailed work order information"""
