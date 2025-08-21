@@ -425,15 +425,35 @@ class WorkOrdersFrame(BaseFrame):
                                font=config.FONTS['title'])
         title_label.pack(anchor=W, pady=(0, 10))
         
-        # Filter and buttons frame
+        # Search, service type, status filter and buttons frame
         top_frame = ttk.Frame(main_frame)
         top_frame.pack(fill=X, pady=(0, 10))
-        
-        # Filter options
+
+        # Left: Search + Service Type + Status
         filter_frame = ttk.Frame(top_frame)
         filter_frame.pack(side=LEFT)
-        
-        ttk.Label(filter_frame, text="Filter:").pack(side=LEFT, padx=(0, 5))
+
+        # Search
+        ttk.Label(filter_frame, text="Search:").pack(side=LEFT, padx=(0, 5))
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(filter_frame, textvariable=self.search_var, width=30)
+        self.search_entry.pack(side=LEFT, padx=(0, 5))
+        ttk.Button(filter_frame, text="Search", command=self.refresh, bootstyle=INFO).pack(side=LEFT, padx=(0, 10))
+
+        # Service type filter
+        ttk.Label(filter_frame, text="Service Type:").pack(side=LEFT, padx=(0, 5))
+        self.service_type_var = tk.StringVar(value="All Services")
+        self.service_type_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.service_type_var,
+            values=["All Services", "Preventive", "Corrective", "Inspection"],
+            width=18
+        )
+        self.service_type_combo.pack(side=LEFT, padx=(0, 10))
+        self.service_type_combo.bind('<<ComboboxSelected>>', lambda e: self.refresh())
+
+        # Status filter (existing)
+        ttk.Label(filter_frame, text="Status:").pack(side=LEFT, padx=(0, 5))
         self.filter_var = tk.StringVar(value="All")
         filter_combo = ttk.Combobox(filter_frame, textvariable=self.filter_var, 
                                    values=["All", "Open", "In Progress", "Completed"], width=15)
@@ -504,10 +524,19 @@ class WorkOrdersFrame(BaseFrame):
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        # Load work orders
-        work_orders = self.db_manager.get_work_orders()
-        
-        # Apply filter
+        # Collect filters
+        keyword = self.search_var.get().strip()
+        service_type = self.service_type_var.get().strip()
+        if service_type == "All Services":
+            service_type = None
+
+        # Load work orders using combined filters
+        if keyword or service_type:
+            work_orders = self.db_manager.filter_work_orders(keyword=keyword, service_type=service_type)
+        else:
+            work_orders = self.db_manager.get_work_orders()
+
+        # Apply status filter last
         filter_status = self.filter_var.get()
         if filter_status != "All":
             work_orders = [wo for wo in work_orders if wo['status'] == filter_status]
